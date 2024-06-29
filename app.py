@@ -9,6 +9,7 @@ from collections import defaultdict
 from fuzzywuzzy import fuzz
 import pandas as pd
 import tempfile
+import openpyxl
 
 app = Flask(__name__)
 
