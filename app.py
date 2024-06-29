@@ -8,11 +8,13 @@ from flask import Flask, request, jsonify, send_from_directory, send_file
 from collections import defaultdict
 from fuzzywuzzy import fuzz
 import pandas as pd
+from flask_cors import CORS
 import tempfile
 import openpyxl
 
 
 app = Flask(__name__)
+CORS(app)  # Enable CORS for the Flask app
 
 # Directory to save uploaded files
 UPLOAD_FOLDER = 'uploaded_cvs'
