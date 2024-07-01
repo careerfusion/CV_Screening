@@ -137,6 +137,9 @@ def detect_similarity(entered_skills, cv_data):
 # Endpoint to upload CVs
 @app.route('/upload-cv', methods=['POST'])
 def upload_cv():
+    global matched_cvs_storage
+    matched_cvs_storage = {}  # Clear the matched CVs storage
+
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
 
