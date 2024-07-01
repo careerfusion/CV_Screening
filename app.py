@@ -1,4 +1,5 @@
 import os
+import shutil
 import nltk
 from nltk.corpus import stopwords, wordnet
 from nltk.tokenize import word_tokenize
@@ -11,7 +12,6 @@ import pandas as pd
 from flask_cors import CORS
 import tempfile
 import openpyxl
-
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for the Flask app
@@ -138,7 +138,21 @@ def detect_similarity(entered_skills, cv_data):
 @app.route('/upload-cv', methods=['POST'])
 def upload_cv():
     global matched_cvs_storage
+    global positions_storage
+    
     matched_cvs_storage = {}  # Clear the matched CVs storage
+    positions_storage = {}  # Clear the positions storage
+    
+    # Clear the upload directory
+    for filename in os.listdir(app.config['UPLOAD_FOLDER']):
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        try:
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)
+            elif os.path.isdir(file_path):
+                shutil.rmtree(file_path)
+        except Exception as e:
+            return jsonify({"error": f"Failed to delete {file_path}. Reason: {e}"}), 500
 
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
