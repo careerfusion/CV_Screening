@@ -10,18 +10,24 @@ from collections import defaultdict
 from fuzzywuzzy import fuzz
 import pandas as pd
 from flask_cors import CORS
-import tempfile
-import openpyxl
+import nlp
+import spacy
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for the Flask app
-
+#NLP : Tokenization,Lemmatization
+#Named Entity Recognition (NER) 
+#Fuzzy Matching
+#Synonym Extraction using WordNet
 # Directory to save uploaded files
 UPLOAD_FOLDER = 'uploaded_cvs'
 PUBLIC_FOLDER = os.path.join('static', UPLOAD_FOLDER)
 os.makedirs(PUBLIC_FOLDER, exist_ok=True)
 
 app.config['UPLOAD_FOLDER'] = PUBLIC_FOLDER
+
+nlp = spacy.load('en_core_web_md')
+
 
 # Storage for matched CVs and positions
 matched_cvs_storage = {}
@@ -52,7 +58,6 @@ def get_synonyms(word):
             synonyms.add(lemma.name())
     return synonyms
 
-# Function to preprocess CV text
 def preprocess_cv(cv_text):
     stop_words = set(stopwords.words('english'))
     lemmatizer = WordNetLemmatizer()
@@ -60,13 +65,26 @@ def preprocess_cv(cv_text):
     contact_info = {}
 
     for line in cv_text:
+        # Tokenize the line into words
         words = word_tokenize(line)
+        
+        # Lowercase and filter out non-alphabetic words and stopwords
         words = [word.lower() for word in words if word.isalpha() and word.lower() not in stop_words]
+        
+        # Lemmatize the words
         words = [lemmatizer.lemmatize(word) for word in words]
 
-        if line.startswith("3."):
-            skill_name = line.split(":")[1].split('(')[0].strip()  # Extract SkillName without SkillLevel
-            skills.append(skill_name)
+        # Check for specific sections or headers where skills are listed
+        if line.startswith("3."):  # Assuming skills are listed under section starting with "3."
+            # Extract skills using a specific format or pattern
+            if "SkillName" in line:
+                # Split the line to get the skill name
+                skill_info = line.split(":")
+                if len(skill_info) >= 2:
+                    skill_name = skill_info[1].strip()
+                    skills.append(skill_name)
+        
+        # Extract contact information (example: email, phone number)
         elif line.lower().startswith("full name:"):
             contact_info['full_name'] = line.split(":")[1].strip()
         elif line.lower().startswith("address:"):
@@ -76,7 +94,11 @@ def preprocess_cv(cv_text):
         elif line.lower().startswith("email:"):
             contact_info['email'] = line.split(":")[1].strip()
 
+    # Print extracted skills for debugging
+    print(f"Extracted Skills: {skills}")
+
     return skills, contact_info
+
 
 # Function to load CV data from folder
 def load_cv_data(folder_path):
@@ -90,39 +112,46 @@ def load_cv_data(folder_path):
             skills, contact_info = preprocess_cv(cv_text)
             cv_data.append((skills, contact_info, file_name, file_path))
     return cv_data
-
-# Function to preprocess entered skills
+# Function to preprocess entered skills using spaCy embeddings
 def preprocess_entered_skills(entered_skills):
-    lemmatizer = WordNetLemmatizer()
     processed_skills = []
     for skill in entered_skills:
-        words = word_tokenize(skill)
-        words = [word.lower() for word in words if word.isalpha()]
-        words = [lemmatizer.lemmatize(word) for word in words]
-        processed_skills.append(' '.join(words))
+        doc = nlp(skill.lower())  # Process skill text with spaCy
+        processed_skills.append(doc)
     return processed_skills
 
-# Function to detect similarity based on entered skills
+
+# Function to detect similarity based on entered skills using spaCy embeddings
 def detect_similarity(entered_skills, cv_data):
     entered_skills_processed = preprocess_entered_skills(entered_skills)  # Preprocess the entered skills
 
     cv_matches = defaultdict(list)
 
     for skills, contact_info, file_name, file_path in cv_data:
-        cv_skills = [skill.lower() for skill in skills]  # Lower case the skills from CV
+        cv_skills = [skill.lower() for skill in skills]  # Lowercase the skills from CV
 
         common_skills = []
         for entered_skill in entered_skills_processed:
-            entered_synonyms = get_synonyms(entered_skill)
+            found_match = False
             for cv_skill in cv_skills:
-                cv_synonyms = get_synonyms(cv_skill)
-                if (fuzz.partial_ratio(entered_skill, cv_skill) >= 80) or (entered_synonyms & set(cv_synonyms)):
+                doc_cv_skill = nlp(cv_skill)
+                similarity_score = entered_skill.similarity(doc_cv_skill)
+                if similarity_score >= 0.7:  # Adjust similarity threshold as needed
                     common_skills.append(cv_skill)
-                    break  # Move to the next entered skill once a match is found
+                    found_match = True
+                    break
+            
+            if not found_match:
+                # Fallback to fuzzy matching if no strong embedding similarity found
+                for cv_skill in cv_skills:
+                    if fuzz.partial_ratio(entered_skill.text, cv_skill) >= 80:
+                        common_skills.append(cv_skill)
+                        found_match = True
+                        break
 
         match_score = len(common_skills) / len(entered_skills)  # Score based on overlap with entered skills
 
-        cv_matches[match_score].append((contact_info, file_name, file_path, common_skills))
+        cv_matches[match_score].append((skills, contact_info, file_name, file_path, common_skills))
 
     sorted_scores = sorted(cv_matches.keys(), reverse=True)
     recommended_cvs = []
@@ -130,9 +159,28 @@ def detect_similarity(entered_skills, cv_data):
     for score in sorted_scores:
         if score > 0:
             for cv_info in cv_matches[score]:
-                recommended_cvs.append(cv_info)
+                skills, contact_info, recommended_cv_file, recommended_cv_path, matched_skills = cv_info
+                
+                # Ensure unique skills are included
+                unique_matched_skills = list(set(matched_skills))
+                
+                recommended_cvs.append({
+                    "position": positions_storage['position'],
+                    "file_name": recommended_cv_file,
+                    "file_path": f"/{app.config['UPLOAD_FOLDER']}/{recommended_cv_file}",
+                    "contact_info": {
+                        "email": contact_info.get('email', 'N/A'),
+                        "phone_number": contact_info.get('phone_number', 'N/A')
+                    },
+                    "matched_skills": unique_matched_skills
+                })
+
+    # Debug print to check the processed skills and matched output
+    print(f"Processed entered skills: {[skill.text for skill in entered_skills_processed]}")
+    print(f"Matched CVs: {recommended_cvs}")
 
     return recommended_cvs
+
 
 # Endpoint to upload CVs
 @app.route('/upload-cv', methods=['POST'])
@@ -215,10 +263,10 @@ def match_cvs():
 
     results = []
     for cv_info in similar_cvs:
-        contact_info = cv_info[0]
-        recommended_cv_file = cv_info[1]
-        recommended_cv_path = cv_info[2]
-        matched_skills = cv_info[3]
+        # Ensure to access cv_info correctly based on its structure
+        contact_info = cv_info['contact_info']
+        recommended_cv_file = cv_info['file_name']
+        matched_skills = cv_info['matched_skills']
 
         results.append({
             "position": position,
@@ -232,6 +280,7 @@ def match_cvs():
         })
 
     return jsonify(results)
+
 
 # Endpoint to get the matched CVs
 @app.route('/get-matched-cvs', methods=['GET'])
@@ -297,6 +346,5 @@ def export_to_excel():
 def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+if __name__ == '__main__':
+    app.run(debug=True)
